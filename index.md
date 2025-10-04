@@ -1,7 +1,7 @@
 ---
 layout: default
-title: My Blog
+title: Hello
 ---
-# Welcome to My Blog
-This is my personal blog!
+
+hello world!
 
