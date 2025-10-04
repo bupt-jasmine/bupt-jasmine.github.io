@@ -37,6 +37,9 @@ title: "Welcome to My Blog"
 
 <ul>
     <h3>test</h3>
+  {% for category in site.categories %}
+    <li>{{ category[0] }}</li>
+  {% endfor %}
 </ul>
 
 
