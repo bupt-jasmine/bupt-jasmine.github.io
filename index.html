@@ -42,6 +42,11 @@ title: "Jasmine's Blog"
           <li>No categories found.</li>
         {% endfor %}
       </ul>
+<ul>
+  {% for post in site.posts %}
+    <li><a href="{{ post.url }}">{{ post.title }}</a></li>
+  {% endfor %}
+</ul>
     </div>
   </div>
 
