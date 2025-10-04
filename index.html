@@ -14,9 +14,9 @@ title: "Jasmine's Blog"
 <body>
   <div class="content">
     <h2>notes</h2>
-<pre>{{ site | jsonify }}</pre>
     <ul>
       {% for post in site.posts %}
+        <pre>{{ post | jsonify }}</pre>
         <li>
           <a href="{{ post.url }}">{{ post.title }}</a> - {{ post.date | date: "%B %d, %Y" }}
         </li>
