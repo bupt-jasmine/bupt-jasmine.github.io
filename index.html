@@ -10,66 +10,24 @@ title: "Jasmine's Blog"
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ page.title }}</title>
   <link rel="stylesheet" href="{{ "/assets/styles.css" | relative_url }}">
-  <style>
-    .category ul {
-      display: none; /* Hide the articles by default */
-      padding-left: 20px;
-    }
-    .category h3 {
-      cursor: pointer;
-      color: #0073e6;
-    }
-    .category h3:hover {
-      color: #005bb5;
-    }
-  </style>
 </head>
 <body>
   <div class="content">
-    <h2>目录</h2>
-    <div class="categories">
-      <ul>
-        {% for category in site.categories %}
-          <li class="category">
-            <h3>{{ category[0] }}</h3>
-            <ul>
-              {% for post in category[1] %}
-                <li><a href="{{ post.url }}">{{ post.title }}</a></li>
-              {% endfor %}
-            </ul>
-          </li>
-        {% else %}
-          <li>No categories found.</li>
-        {% endfor %}
-      </ul>
-<ul>
-  {% for post in site.posts %}
-    <li><a href="{{ post.url }}">{{ post.title }}</a></li>
-  {% endfor %}
-</ul>
-    </div>
+    <h2>notes</h2>
+    <ul>
+      {% for post in site.posts %}
+        <li>
+          <a href="{{ post.url }}">{{ post.title }}</a> - {{ post.date | date: "%B %d, %Y" }}
+        </li>
+      {% else %}
+        <li>no notes</li>
+      {% endfor %}
+    </ul>
   </div>
 
   <footer>
     <p>© 2025 Jasmine's Blog</p>
   </footer>
-
-  <script>
-    document.addEventListener("DOMContentLoaded", function() {
-      var categories = document.querySelectorAll('.category > h3');
-      
-      categories.forEach(function(category) {
-        category.addEventListener('click', function() {
-          var ul = category.nextElementSibling;
-          if (ul.style.display === "none" || ul.style.display === "") {
-            ul.style.display = "block";
-          } else {
-            ul.style.display = "none";
-          }
-        });
-      });
-    });
-  </script>
 </body>
 </html>
 
