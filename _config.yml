@@ -25,7 +25,7 @@ author:
   # Biographic information
   avatar           : "profile.jpeg"
   name             : "bupt-jasmine"
-  bio              : "Short biography for the left-hand sidebar"
+  bio              : "Life is like a boat."
   location         : "广州"
   university       : "BUPT"
   email            : "2017210617@bupt.cn" 
@@ -215,6 +215,9 @@ collections:
   talks:
     output: true
     permalink: /:collection/:path/
+  develop:
+    output: true
+    permalink: /:develop/:path/
 
 
 # These settings control how pages and collections are included in the site
@@ -270,6 +273,14 @@ defaults:
       type: talks
     values:
       layout: talk
+      author_profile: true
+      share: true
+  # _develop
+   - scope:
+      path: ""
+      type: develop
+    values:
+      layout: develop
       author_profile: true
       share: true
 
