@@ -215,9 +215,6 @@ collections:
   talks:
     output: true
     permalink: /:collection/:path/
-  develop:
-    output: true
-    permalink: /:develop/:path/
 
 
 # These settings control how pages and collections are included in the site
@@ -275,15 +272,6 @@ defaults:
       layout: talk
       author_profile: true
       share: true
-  # _develop
-   - scope:
-      path: ""
-      type: develop
-    values:
-      layout: develop
-      author_profile: true
-      share: true
-
 
 # Sass/SCSS
 sass:
