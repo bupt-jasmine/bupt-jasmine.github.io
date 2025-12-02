@@ -24,7 +24,7 @@ A list of all the posts and pages found on the site. For you robots out there, t
   {% capture written_label %}{{ label }}{% endcapture %}
   {% endif %}
 {% endunless %}
-{% assign sorted_docs = collection.docs | sort: 'order' %}
+{% assign sorted_docs = collection.docs | sort: 'date' %}
 {% for post in sorted_docs %}
   {% unless collection.output == false or collection.label == "posts" %}
   {% include archive-single.html %}
