@@ -30,7 +30,7 @@ author:
   location         : "广州"
   employer         : # Your employer/university
   uri              : # URL
-  email            : # your email address
+  email            : "2017210617@bupt.cn"
 
   # Repositories and software development
   github           : "bupt-jasmine"
