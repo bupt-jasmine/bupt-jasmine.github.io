@@ -1,6 +1,6 @@
 ---
 permalink: /
-title: "欢迎来到我的个人博客"
+title: "首页 - Jasmine's Tech Notes"
 author_profile: true
 redirect_from: 
   - /about/
