@@ -1,6 +1,6 @@
 ---
 title: "DataFlow - 数据处理框架"
-excerpt: "高效的数据处理框架，采用 C++/Python 混合开发<br/><img src='/images/500x300.png'>"
+excerpt: "高效的数据处理框架，采用 C++/Python 混合开发"
 collection: portfolio
 ---
 
