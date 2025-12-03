@@ -21,8 +21,9 @@ date: 2025-12-03
 
 ## 一些宏定义
 
-1. `_PyObject_HEAD_EXTRA`
-```c
+1. **_PyObject_HEAD_EXTRA**
+
+```c++
 #ifdef Py_TRACE_REFS
 #define _PyObject_HEAD_EXTRA      \
     PyObject *_ob_next;           \
@@ -40,32 +41,40 @@ date: 2025-12-03
 
 这里定义了一个宏 `_PyObject_HEAD_EXTRA`，用于在调试模式下为每个 `PyObject` 添加额外的指针字段 `_ob_next` 和 `_ob_prev`，以便跟踪对象的引用关系。在非调试模式下，这些字段不会被添加。
 
-2. `PyObject_HEAD`
-```c
+2. **PyObject_HEAD**
+    
+```c++
 /* PyObject_HEAD defines the initial segment of every PyObject. */
 #define PyObject_HEAD                   PyObject ob_base;
 ```
+
 这个宏定义了 `PyObject` 结构体的头部部分，包含了一个 `PyObject` 类型的字段 `ob_base`，用于表示对象的基本信息。
 
-3. `PyObject_HEAD_INIT`
-```c
+3. **PyObject_HEAD_INIT**
+
+```c++
 #define PyObject_HEAD_INIT(type)        \
     { _PyObject_EXTRA_INIT              \
     1, type },
 ```
+
 这个宏用于初始化 `PyObject` 结构体的头部部分。它设置了引用计数为 1，并将类型指针设置为传入的 `type` 参数。
 
-4. `PyVarObject_HEAD_INIT`
-```c
+4. **PyVarObject_HEAD_INIT**
+
+```c++
 #define PyVarObject_HEAD_INIT(type, size)       \
     { PyObject_HEAD_INIT(type) size },
 ```
+
 这个宏用于初始化 `PyVarObject` 结构体的头部部分。它调用了 `PyObject_HEAD_INIT` 宏，并设置了可变大小对象的大小字段 `size`。
 
-5. `PyObject_VAR_HEAD`
-```c
+5. **PyObject_VAR_HEAD**
+
+```c++
 #define PyObject_VAR_HEAD      PyVarObject ob_base;
 ```
+
 这个宏定义了 `PyVarObject` 结构体的头部部分，包含了一个 `PyVarObject` 类型的字段 `ob_base`，用于表示可变大小对象的基本信息。
 
 ---
