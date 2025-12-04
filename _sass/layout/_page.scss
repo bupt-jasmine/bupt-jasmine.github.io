@@ -107,6 +107,17 @@
   }
 }
 
+/* Make images inside page content responsive, centered and limited in max width
+   This prevents inline markdown images from stretching the full page width */
+.page__content img {
+  display: block;
+  margin: 0.9em auto;
+  max-width: 700px; /* adjust as needed */
+  width: 100%; /* allow shrinking on small screens */
+  height: auto;
+  border-radius: $border-radius;
+}
+
 .page__hero {
   position: relative;
   margin-bottom: 2em;
