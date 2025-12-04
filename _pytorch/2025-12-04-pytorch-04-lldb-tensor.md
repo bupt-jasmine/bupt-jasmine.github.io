@@ -866,31 +866,6 @@ graph LR
 | T6 | `THPVariable_NewWithVar` | 创建Python对象并建立双向绑定 | 短 |
 | T7 | 返回 | 将Python对象返回给用户 | 极短 |
 
-### 18.3 性能关键点
-
-```mermaid
-graph TD
-    A["T4: 数据填充<br>recursive_store"]:::critical
-    B["递归遍历嵌套列表"]
-    C["Python→C++类型转换"]
-    D["内存写入"]
-    
-    A --> B
-    A --> C
-    A --> D
-    
-    B --> Note1["时间复杂度: O(n)<br>n为元素总数"]:::note
-    C --> Note2["GIL保护下执行<br>可能成为瓶颈"]:::note
-    D --> Note3["连续内存写入<br>缓存友好"]:::note
-    
-    Note1 -.-> Opt1["优化: 预先验证数据"]
-    Note2 -.-> Opt2["优化: 批量处理"]
-    Note3 -.-> Opt3["优化: 使用向量化操作"]
-    
-    classDef critical fill:#E74C3C,stroke:#C0392B,color:#fff,stroke-width:3px,font-size:13px
-    classDef note fill:#F39C12,stroke:#CA6F1E,color:#fff,stroke-width:2px,font-size:11px
-```
-
 ---
 
 完整的 lldb 调试步骤如下：
