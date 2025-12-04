@@ -566,7 +566,7 @@ graph TD
     L4["legacy_tensor_generic_ctor_new"]:::logicLayer
     L5["legacy_new_from_sequence"]:::logicLayer
     L6["internal_new_from_data"]:::logicLayer
-    L7(["at::empty +<br>recursive_store"])):::coreLayer
+    L7["at::empty +<br>recursive_store"]:::coreLayer
     L8["tensor.to +<br>at::lift_fresh"]:::logicLayer
     L9["THPVariable_NewWithVar"]:::bindingLayer
     L10(("返回 torch.Tensor")):::userLayer
@@ -893,9 +893,7 @@ graph TD
 
 ---
 
-**下一步学习**：
-- [第05章：自动微分机制](./2025-12-04-pytorch-05)
-- [第06章：算子注册与分发](./2025-12-04-pytorch-06)
+完整的 lldb 调试步骤如下：
 ```lldb
 (lldb) target create "/Users/jasmine/miniconda3/envs/torch/bin/python"
 Current executable set to '/Users/jasmine/miniconda3/envs/torch/bin/python' (arm64).
