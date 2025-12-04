@@ -112,10 +112,14 @@
 .page__content img {
   display: block;
   margin: 0.9em auto;
-  max-height: 800px;
-  height: 100%;
-  width: auto;
+  /* Limit dimensions to avoid overly large or tall images while keeping aspect ratio */
+  max-width: 700px; /* maximum display width, adjust as needed */
+  max-height: 800px; /* maximum display height, adjust as needed */
+  width: 100%; /* allow it to shrink on small screens */
+  height: auto; /* preserve aspect ratio */
   border-radius: $border-radius;
+  /* object-fit helps when both width/height constraints apply in some browsers */
+  object-fit: contain;
 }
 
 .page__hero {
