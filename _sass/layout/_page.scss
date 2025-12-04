@@ -114,7 +114,8 @@
   margin: 0.9em auto;
   max-width: 700px; /* adjust as needed */
   width: 100%; /* allow shrinking on small screens */
-  height: auto;
+  max-height: 800px;
+  height: 100%;
   border-radius: $border-radius;
 }
 
