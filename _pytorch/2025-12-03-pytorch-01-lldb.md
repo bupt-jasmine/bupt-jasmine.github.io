@@ -1,5 +1,5 @@
 ---
-title: "使用 LLDB 调试 PyTorch"
+title: "PyTorch源码解析系列 - 第01章：使用 LLDB 调试 PyTorch"
 collection: pytorch
 permalink: /pytorch/2025-12-03-pytorch-01-lldb
 excerpt: '介绍如何使用 LLDB 调试 PyTorch 源码'

@@ -1,5 +1,5 @@
 ---
-title: "CPython 基础"
+title: "PyTorch源码解析系列 - 第01章：CPython 基础"
 collection: pytorch
 permalink: /pytorch/pytorch-01-cpython
 excerpt: '介绍 CPython 基础类及其宏定义，帮助理解 Python 对象模型'

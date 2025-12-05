@@ -1,5 +1,5 @@
 ---
-title: "PyTorch源码解析系列 - 使用LLDB调试Tensor构造过程"
+title: "PyTorch源码解析系列 - 第04章：使用LLDB调试Tensor构造过程"
 collection: pytorch
 permalink: /pytorch/2025-12-04-pytorch-04-lldb-tensor
 excerpt: "深入学习如何使用LLDB调试工具追踪PyTorch Tensor对象的完整构造过程，理解Python到C++的调用链路和内存分配机制"
