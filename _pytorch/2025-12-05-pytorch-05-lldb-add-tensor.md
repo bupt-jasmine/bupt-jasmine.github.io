@@ -1,3 +1,821 @@
+---
+title: "PyTorch源码解析系列 - 第05章：使用 LLDB 调试 Tensor add 操作，深入理解 Dispatch 机制"
+collection: pytorch
+permalink: /pytorch/2025-12-05-pytorch-05-lldb-add-tensor
+excerpt: "通过LLDB调试PyTorch张量加法操作，深入剖析Dispatch机制的实现细节，理解从Python调用到底层Kernel的完整流程"
+date: 2025-12-05
+---
+
+## 1. 概述
+
+PyTorch的Dispatch机制是其核心架构的基石，负责将算子调用路由到正确的Kernel实现。本文基于PyTorch 2.8源码和LLDB调试，深入剖析从Python `a + b` 到底层CUDA/CPU Kernel的完整调用链。
+
+完整的 LLDB 调试记录放在最后。
+
+### 1.1 示例代码
+
+```python
+import torch
+
+a = torch.tensor([1, 2, 3])
+b = torch.tensor([2, 3, 4])
+c = a + b  # 触发Dispatch机制
+print(c)
+```
+
+这个简单的张量加法操作，背后经历了：
+- **Python绑定层**：`__add__` → `Tensor.add`
+- **C++ API层**：`at::Tensor::add`
+- **算子注册层**：`at::_ops::add_Tensor::call`
+- **分发器层**：`c10::Dispatcher::call`
+- **Kernel选择层**：根据`DispatchKeySet`查找Kernel
+- **自动微分层**：`torch::autograd::VariableType::add_Tensor`
+- **底层实现层**：CPU/CUDA Kernel
+
+---
+
+## 2. Dispatch机制的核心概念
+
+### 2.1 什么是Dispatch？
+
+**Dispatch**（分发）是指根据张量的类型、设备、是否需要梯度等属性，动态选择正确的算子实现的过程。PyTorch使用**多重分发**（Multiple Dispatch）机制，支持：
+
+- **设备分发**：CPU、CUDA、XLA等
+- **功能分发**：稠密张量、稀疏张量、量化张量
+- **Autograd分发**：是否需要梯度计算
+- **自定义分发**：用户自定义Backend
+
+### 2.2 核心数据结构
+
+```mermaid
+graph TB
+    subgraph "核心组件"
+        A[DispatchKey] -->|组合成| B[DispatchKeySet]
+        B -->|传递给| C[Dispatcher]
+        C -->|查找| D[OperatorEntry]
+        D -->|返回| E[KernelFunction]
+    end
+    
+    subgraph "DispatchKey类型"
+        F1[CPU] -.->|Backend| A
+        F2[CUDA] -.->|Backend| A
+        F3[AutogradCPU] -.->|Functionality| A
+        F4[Sparse] -.->|Functionality| A
+    end
+    
+    style A fill:#e1f5ff
+    style B fill:#fff4e1
+    style C fill:#ffe1f5
+    style D fill:#e1ffe1
+    style E fill:#f0f0f0
+```
+
+---
+
+## 3. LLDB调试追踪分析
+
+### 3.1 调用栈概览
+
+基于提供的LLDB调试记录，我们追踪`a + b`的完整调用链：
+
+```
+Python层
+  └─> at::Tensor::add                          [TensorBody.h:1669]
+       └─> at::_ops::add_Tensor::call          [Operators_2.cpp:1027]
+            └─> TypedOperatorHandle::call      [Dispatcher.h:608]
+                 └─> c10::Dispatcher::call     [Dispatcher.h:772]
+                      ├─> 提取DispatchKeySet
+                      ├─> op.lookup(dispatchKeySet)
+                      └─> kernel.call           [KernelFunction_impl.h:143]
+                           └─> callUnboxedKernelFunction
+                                └─> wrap_kernel_functor_unboxed_::call
+                                     └─> torch::autograd::VariableType::add_Tensor
+                                          ├─> 创建AddBackward0节点
+                                          ├─> 保存反向传播所需数据
+                                          └─> 调用下一层Kernel
+```
+
+### 3.2 关键断点分析
+
+#### 断点1：算子入口 (`at::Tensor::add`)
+
+```cpp
+// TensorBody.h:1669
+inline at::Tensor Tensor::add(const at::Tensor & other, const at::Scalar & alpha) const {
+    return at::_ops::add_Tensor::call(const_cast<Tensor&>(*this), other, alpha);
+}
+```
+
+**分析**：
+- 这是C++ Tensor API的入口
+- 将成员函数调用转换为静态函数调用
+- 传递给代码生成的算子包装器 `at::_ops::add_Tensor`
+
+#### 断点2：算子注册表查找 (`create_add_Tensor_typed_handle`)
+
+```cpp
+// Operators_2.cpp:1027
+static auto op = create_add_Tensor_typed_handle();
+return op.call(self, other, alpha);
+```
+
+**分析**：
+- `create_add_Tensor_typed_handle()` 是编译期生成的静态函数
+- 返回 `TypedOperatorHandle<Tensor(Tensor, Tensor, Scalar)>`
+- 该Handle包含算子元数据（schema、name）
+
+#### 断点3：Dispatcher核心逻辑 (`c10::Dispatcher::call`)
+
+```cpp
+// Dispatcher.h:772-773
+auto dispatchKeySet =
+    op.operatorDef_->op.dispatchKeyExtractor()
+        .template getDispatchKeySetUnboxed<Args...>(args...);
+```
+
+**关键步骤**：
+
+1. **提取DispatchKeySet**
+   ```cpp
+   // 从输入张量中提取DispatchKey
+   // repr_ = 137439019009 (二进制表示)
+   // 这个64位整数编码了所有相关的DispatchKey
+   ```
+
+2. **查找Kernel**
+   ```cpp
+   // Dispatcher.h:781
+   const KernelFunction& kernel = op.operatorDef_->op.lookup(dispatchKeySet);
+   ```
+
+3. **调用Kernel**
+   ```cpp
+   // Dispatcher.h:815-816
+   return kernel.template call<Return, Args...>(
+       op, dispatchKeySet, std::forward<Args>(args)...);
+   ```
+
+### 3.3 DispatchKeySet解析
+
+从调试记录中看到：`dispatchKeySet=(repr_ = 137439019009)`
+
+**二进制分解**：
+```
+137439019009 = 0x2000004001 (十六进制)
+             = 0b10000000000000000000000100000000001 (二进制)
+```
+
+这个64位整数编码了多个DispatchKey（从高到低优先级）：
+- Bit 37: **AutogradCPU** (自动微分)
+- Bit 14: **CPU** (CPU backend)
+- Bit 0: **Undefined** (默认位)
+
+---
+
+## 4. DispatchKey与DispatchKeySet
+
+### 4.1 DispatchKey枚举
+
+```cpp
+// c10/core/DispatchKey.h
+enum class BackendComponent : uint8_t {
+  InvalidBit = 0,
+  CPUBit,        // CPU后端
+  CUDABit,       // CUDA后端
+  XLABit,        // XLA后端
+  MPSBit,        // Metal Performance Shaders
+  // ... 更多后端
+  MetaBit,       // Meta张量（无数据）
+};
+
+// 功能性DispatchKey
+#define C10_FORALL_FUNCTIONALITY_KEYS(_) \
+  _(Dense, )                             \
+  _(Quantized, Quantized)                \
+  _(Sparse, Sparse)                      \
+  _(SparseCsr, SparseCsr)                \
+  _(NestedTensor, NestedTensor)          \
+  _(AutogradFunctionality, Autograd)
+```
+
+### 4.2 DispatchKeySet结构
+
+```cpp
+// c10/core/DispatchKeySet.h
+class DispatchKeySet {
+private:
+  uint64_t repr_;  // 64位掩码
+
+public:
+  // 从张量中提取DispatchKeySet
+  static DispatchKeySet fromTensor(const Tensor& t) {
+    return t.key_set();
+  }
+  
+  // 获取最高优先级的DispatchKey
+  DispatchKey highestPriorityTypeId() const {
+    return static_cast<DispatchKey>(
+        64 - llvm::countLeadingZeros(repr_));
+  }
+  
+  // 计算dispatch table索引
+  int64_t getDispatchTableIndexForDispatchKeySet() const;
+};
+```
+
+### 4.3 DispatchKey优先级
+
+```mermaid
+graph TB
+    subgraph "优先级顺序（从高到低）"
+        P1[Python Dispatch]
+        P2[FuncTorchBatched]
+        P3[FuncTorchDynamicLayer]
+        P4[Autograd Keys]
+        P5[ADInplaceOrView]
+        P6[AutocastCPU/CUDA]
+        P7[Functionalize]
+        P8[Backend Keys]
+        P9[Dense/Sparse/Quantized]
+    end
+    
+    P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8 --> P9
+    
+    style P4 fill:#ffe1f5
+    style P8 fill:#e1ffe1
+```
+
+**关键点**：
+- **Autograd Keys** 优先级高于 **Backend Keys**
+- 这保证了梯度计算逻辑先于实际计算执行
+- 每个Backend都有对应的Autograd Key（如`AutogradCPU`、`AutogradCUDA`）
+
+---
+
+## 5. Dispatcher单例与算子注册
+
+### 5.1 Dispatcher单例模式
+
+```cpp
+// aten/src/ATen/core/dispatch/Dispatcher.h
+class TORCH_API Dispatcher final {
+public:
+  static Dispatcher& singleton() {
+#if !defined C10_MOBILE
+    static Dispatcher& s = realSingleton();
+    return s;
+#else
+    return realSingleton();
+#endif
+  }
+
+private:
+  struct OperatorDef final {
+    explicit OperatorDef(OperatorName&& op_name) 
+      : op(std::move(op_name)) {}
+    
+    impl::OperatorEntry op;
+    size_t def_count = 0;
+    size_t def_and_impl_count = 0;
+  };
+  
+  // 算子查找表：operator_name -> OperatorDef
+  ska::flat_hash_map<OperatorName, OperatorDef> operatorLookupTable_;
+  
+  // 后端fallback kernels
+  std::array<std::optional<KernelFunction>, num_runtime_entries> backendFallbackKernels_;
+};
+```
+
+### 5.2 算子注册流程
+
+```mermaid
+graph LR
+    A[TORCH_LIBRARY] -->|定义schema| B[Dispatcher::registerDef]
+    C[TORCH_LIBRARY_IMPL] -->|注册kernel| D[Dispatcher::registerImpl]
+    
+    B -->|创建| E[OperatorEntry]
+    D -->|添加kernel| E
+    
+    E -->|计算| F[Dispatch Table]
+    
+    style A fill:#e1f5ff
+    style C fill:#fff4e1
+    style E fill:#ffe1f5
+    style F fill:#e1ffe1
+```
+
+#### 示例：add算子的注册
+
+```cpp
+// aten/src/ATen/native/native_functions.yaml
+- func: add.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor
+  device_check: NoCheck
+  variants: function, method
+  dispatch:
+    CPU: add_cpu
+    CUDA: add_cuda
+    Meta: add_meta
+
+// 生成的注册代码 (build/aten/src/ATen/Operators_2.cpp)
+TORCH_LIBRARY(aten, m) {
+  m.def("add.Tensor", /* schema */);
+}
+
+TORCH_LIBRARY_IMPL(aten, CPU, m) {
+  m.impl("add.Tensor", TORCH_FN(add_cpu));
+}
+
+TORCH_LIBRARY_IMPL(aten, Autograd, m) {
+  m.impl("add.Tensor", 
+    torch::autograd::VariableType::add_Tensor);
+}
+```
+
+### 5.3 OperatorEntry结构
+
+```cpp
+// aten/src/ATen/core/dispatch/OperatorEntry.h
+class TORCH_API OperatorEntry final {
+private:
+  OperatorName name_;
+  std::optional<AnnotatedSchema> schema_;
+  
+  // Dispatch table: DispatchKey索引 -> KernelFunction
+  std::array<KernelFunction, num_runtime_entries> dispatchTable_;
+  
+  // DispatchKey提取器
+  DispatchKeyExtractor dispatchKeyExtractor_;
+  
+  // 已注册的kernels
+  ska::flat_hash_map<DispatchKey, AnnotatedKernelContainer> kernels_;
+
+public:
+  // 查找kernel的核心函数
+  const KernelFunction& lookup(DispatchKeySet ks) const {
+    const auto idx = ks.getDispatchTableIndexForDispatchKeySet();
+    if (C10_UNLIKELY(idx == -1)) {
+      reportError(ks.highestPriorityTypeId());
+    }
+    const auto& kernel = dispatchTable_[idx];
+    if (C10_UNLIKELY(!kernel.isValidUnboxed())) {
+      if (!kernel.isValid()) {
+        reportError(ks.highestPriorityTypeId());
+      }
+    }
+    return kernel;
+  }
+};
+```
+
+---
+
+## 6. 算子查找与分发流程
+
+### 6.1 完整分发流程
+
+```mermaid
+graph TB
+    Start([a + b]) --> Step1[at::Tensor::add]
+    Step1 --> Step2[at::_ops::add_Tensor::call]
+    Step2 --> Step3[TypedOperatorHandle::call]
+    Step3 --> Step4[Dispatcher::call]
+    
+    Step4 --> Extract[提取DispatchKeySet]
+    Extract --> GetKeys[从输入张量获取KeySet]
+    GetKeys --> Merge[合并所有张量的KeySet]
+    Merge --> TLS[加入TLS的include/exclude]
+    
+    TLS --> Lookup[OperatorEntry::lookup]
+    Lookup --> CalcIdx[计算dispatch table索引]
+    CalcIdx --> GetKernel[从dispatchTable_获取Kernel]
+    
+    GetKernel --> Check{Kernel有效?}
+    Check -->|Yes| Call[KernelFunction::call]
+    Check -->|No| Error[reportError]
+    
+    Call --> Unboxed{有unboxed版本?}
+    Unboxed -->|Yes| CallUnboxed[callUnboxedKernelFunction]
+    Unboxed -->|No| CallBoxed[callBoxedKernelFunction]
+    
+    CallUnboxed --> Wrapper[wrap_kernel_functor_unboxed_]
+    Wrapper --> Actual[实际Kernel函数]
+    
+    style Step4 fill:#ffe1f5
+    style Lookup fill:#e1ffe1
+    style Call fill:#fff4e1
+    style Actual fill:#e1f5ff
+```
+
+### 6.2 DispatchKeySet提取详解
+
+```cpp
+// aten/src/ATen/core/dispatch/DispatchKeyExtractor.h
+class DispatchKeyExtractor final {
+public:
+  template<class... Args>
+  DispatchKeySet getDispatchKeySetUnboxed(const Args&... args) const {
+    auto ks = c10::DispatchKeySet();
+    
+    // 从每个Tensor参数中提取DispatchKeySet
+    c10::guts::tuple_map(
+      std::forward_as_tuple(args...),
+      [&](const auto& arg) {
+        if constexpr (std::is_same_v<
+            std::decay_t<decltype(arg)>, at::Tensor>) {
+          ks = ks | arg.key_set();
+        }
+      }
+    );
+    
+    // 加入thread-local的include/exclude
+    auto local_keyset = c10::impl::tls_local_dispatch_key_set();
+    ks = (ks | local_keyset.included_) - local_keyset.excluded_;
+    
+    return ks;
+  }
+};
+```
+
+**示例计算**：
+```cpp
+// 假设：
+// a.key_set() = {CPU, Dense, AutogradCPU}
+// b.key_set() = {CPU, Dense, AutogradCPU}
+// TLS.included = {Python}
+// TLS.excluded = {}
+
+// 结果：
+// ks = {CPU, Dense, AutogradCPU, Python}
+```
+
+### 6.3 Dispatch Table索引计算
+
+```cpp
+// c10/core/DispatchKeySet.h
+int64_t getDispatchTableIndexForDispatchKeySet() const {
+  // 获取最高优先级的DispatchKey
+  DispatchKey highest = highestPriorityTypeId();
+  
+  // 计算索引
+  // 对于"per-backend"的功能（如Autograd），需要结合backend信息
+  if (isPerBackendFunctionality(highest)) {
+    // 提取backend bits
+    auto backend_key = getBackendKey(*this);
+    return calcRuntimeIndex(highest, backend_key);
+  } else {
+    return toRuntimeIndex(highest);
+  }
+}
+```
+
+**Dispatch Table结构**：
+```
+dispatchTable_[0]   -> Undefined Kernel
+dispatchTable_[1]   -> CPU Kernel
+dispatchTable_[2]   -> CUDA Kernel
+...
+dispatchTable_[20]  -> AutogradCPU Kernel
+dispatchTable_[21]  -> AutogradCUDA Kernel
+...
+dispatchTable_[N-1] -> Python Kernel
+```
+
+---
+
+## 7. Kernel函数调用机制
+
+### 7.1 KernelFunction结构
+
+```cpp
+// aten/src/ATen/core/boxing/KernelFunction.h
+class KernelFunction final {
+private:
+  // Boxed调用：通过IValue参数栈
+  c10::OperatorKernel* boxed_kernel_func_;
+  
+  // Unboxed调用：直接的C++函数指针
+  void* unboxed_kernel_func_;
+
+public:
+  template<class Return, class... Args>
+  C10_ALWAYS_INLINE Return call(
+      const OperatorHandle& opHandle,
+      DispatchKeySet dispatchKeySet,
+      Args... args) const {
+    
+    // 优先使用unboxed调用（性能更好）
+    if (C10_LIKELY(unboxed_kernel_func_ != nullptr)) {
+      auto* functor = boxed_kernel_func_->getFunctor();
+      return callUnboxedKernelFunction<Return, Args...>(
+          unboxed_kernel_func_,
+          functor,
+          dispatchKeySet,
+          std::forward<Args>(args)...);
+    }
+    
+    // 回退到boxed调用
+    return callBoxedKernelFunction<Return, Args...>(
+        opHandle, dispatchKeySet, std::forward<Args>(args)...);
+  }
+};
+```
+
+### 7.2 Unboxed调用路径
+
+```cpp
+// c10/core/boxing/impl/make_boxed_from_unboxed_functor.h
+template<class KernelFunctor, class Return, class... Args>
+Return wrap_kernel_functor_unboxed_<...>::call(
+    c10::OperatorKernel* functor,
+    DispatchKeySet dispatchKeySet,
+    Args... args) {
+  
+  KernelFunctor* functor_ = static_cast<KernelFunctor*>(functor);
+  
+  // 直接调用kernel functor
+  return (*functor_)(dispatchKeySet, std::forward<Args>(args)...);
+}
+```
+
+**关键优化**：
+- **Unboxed调用**：零开销的直接函数调用
+- **Inlining**：`C10_ALWAYS_INLINE` 确保内联
+- **Type Safety**：编译期类型检查
+
+### 7.3 从函数指针到实际Kernel
+
+```cpp
+// 调试记录中的关键步骤
+// KernelFunction_impl.h:75-76
+ActualSignature* func = 
+    reinterpret_cast<ActualSignature*>(unboxed_kernel_func_);
+return (*func)(functor, dispatchKeySet, std::forward<Args>(args)...);
+
+// 其中 ActualSignature = 
+//   Return(OperatorKernel*, DispatchKeySet, Args...)
+// unboxed_kernel_func_ 指向
+//   wrap_kernel_functor_unboxed_<...>::call
+```
+
+---
+
+## 8. Autograd集成
+
+### 8.1 VariableType Wrapper
+
+从LLDB调试记录可以看到，最终调用到：
+```cpp
+// torch/csrc/autograd/VariableType_2.cpp:6517
+at::Tensor add_Tensor(
+    c10::DispatchKeySet ks,
+    const at::Tensor & self,
+    const at::Tensor & other,
+    const at::Scalar & alpha) {
+  
+  // 1. 解包变量
+  auto& self_ = unpack(self, "self", 0);
+  auto& other_ = unpack(other, "other", 1);
+  
+  // 2. 检查是否需要梯度
+  auto _any_requires_grad = compute_requires_grad(self, other);
+  
+  // 3. 创建反向传播节点
+  std::shared_ptr<AddBackward0> grad_fn;
+  if (_any_requires_grad) {
+    grad_fn = std::shared_ptr<AddBackward0>(new AddBackward0(), deleteNode);
+    grad_fn->set_next_edges(collect_next_edges(self, other));
+    grad_fn->alpha = alpha;
+  }
+  
+  // 4. 保存前向计算所需的张量信息
+  auto self__storage_saved =
+    self_.has_storage() ? 
+      std::optional<Storage>(self_.storage()) : std::nullopt;
+  c10::intrusive_ptr<TensorImpl> self__impl_saved;
+  if (self_.defined()) 
+    self__impl_saved = self_.getIntrusivePtr();
+  
+  auto other__storage_saved =
+    other_.has_storage() ? 
+      std::optional<Storage>(other_.storage()) : std::nullopt;
+  c10::intrusive_ptr<TensorImpl> other__impl_saved;
+  if (other_.defined()) 
+    other__impl_saved = other_.getIntrusivePtr();
+  
+  // 5. 继续dispatch到下一层（实际计算）
+  auto tmp = ([&]() {
+    at::AutoDispatchBelowAutograd guard;
+    // 递归调用dispatcher，但排除Autograd keys
+    return at::add(self_, other_, alpha);
+  })();
+  
+  // 6. 设置梯度函数
+  if (grad_fn) {
+    set_history(flatten_tensor_args(tmp), grad_fn);
+  }
+  
+  return tmp;
+}
+```
+
+### 8.2 Autograd节点创建
+
+```cpp
+// torch/csrc/autograd/generated/Functions.h
+struct AddBackward0 : public TraceableFunction {
+  using TraceableFunction::TraceableFunction;
+  
+  variable_list apply(variable_list&& grads) override {
+    // 反向传播逻辑
+    auto grad_output = grads[0];
+    auto grad_self = grad_output;
+    auto grad_other = grad_output * alpha;
+    return {grad_self, grad_other};
+  }
+  
+  c10::Scalar alpha;  // 保存的参数
+  SavedVariable self_; // 保存的输入（如果需要）
+  SavedVariable other_;
+};
+```
+
+### 8.3 计算图构建
+
+```mermaid
+graph TB
+    subgraph "前向传播"
+        A((a)) -->|输入| M1[MulBackward]
+        B((b)) -->|输入| M1
+        M1 -->|输出| C((c))
+        C -->|输入| A1[AddBackward]
+        D((d)) -->|输入| A1
+        A1 -->|输出| E((e))
+    end
+    
+    subgraph "反向传播（构建时）"
+        M1 -.->|grad_fn| A
+        M1 -.->|grad_fn| B
+        A1 -.->|grad_fn| C
+        A1 -.->|grad_fn| D
+    end
+    
+    style A fill:#e1f5ff
+    style B fill:#e1f5ff
+    style C fill:#fff4e1
+    style D fill:#e1f5ff
+    style E fill:#ffe1f5
+```
+
+### 8.4 AutoDispatchBelowAutograd
+
+```cpp
+// c10/core/impl/LocalDispatchKeySet.h
+struct AutoDispatchBelowAutograd {
+  AutoDispatchBelowAutograd() 
+    : guard_(c10::autograd_dispatch_keyset) {}
+  
+private:
+  c10::impl::ExcludeDispatchKeyGuard guard_;
+};
+
+// 效果：临时从DispatchKeySet中排除Autograd keys
+// 这样递归dispatch时不会再次进入Autograd层
+```
+
+---
+
+## 9. 完整流程图
+
+### 9.1 端到端调用链
+
+```mermaid
+graph TB
+    Start([Python: a + b])
+    
+    subgraph "Python绑定层"
+        P1[__add__ method]
+        P2[THPVariable_add]
+        P3[dispatch_add]
+    end
+    
+    subgraph "C++ Tensor API"
+        C1[at::Tensor::add]
+        C2[at::_ops::add_Tensor::call]
+    end
+    
+    subgraph "算子Handle"
+        H1[create_add_Tensor_typed_handle]
+        H2[TypedOperatorHandle::call]
+    end
+    
+    subgraph "Dispatcher核心"
+        D1[Dispatcher::call]
+        D2[提取DispatchKeySet]
+        D3[OperatorEntry::lookup]
+        D4[计算dispatch table索引]
+        D5[获取KernelFunction]
+    end
+    
+    subgraph "Kernel调用"
+        K1[KernelFunction::call]
+        K2[callUnboxedKernelFunction]
+        K3[wrap_kernel_functor_unboxed_]
+    end
+    
+    subgraph "Autograd层"
+        A1[VariableType::add_Tensor]
+        A2[创建AddBackward0]
+        A3[保存前向数据]
+        A4[AutoDispatchBelowAutograd]
+    end
+    
+    subgraph "Backend实现"
+        B1[再次Dispatcher::call]
+        B2[选择CPU/CUDA kernel]
+        B3[at::native::add_cpu/cuda]
+        B4[调用BLAS/cuBLAS]
+    end
+    
+    Start --> P1 --> P2 --> P3
+    P3 --> C1 --> C2
+    C2 --> H1 --> H2
+    H2 --> D1 --> D2 --> D3 --> D4 --> D5
+    D5 --> K1 --> K2 --> K3
+    K3 --> A1 --> A2 --> A3 --> A4
+    A4 --> B1 --> B2 --> B3 --> B4
+    
+    B4 --> End([返回结果张量])
+    
+    style D1 fill:#ffe1f5
+    style D3 fill:#e1ffe1
+    style A1 fill:#fff4e1
+    style B3 fill:#e1f5ff
+```
+
+### 9.2 DispatchKeySet的演变
+
+```mermaid
+graph LR
+    subgraph "输入张量"
+        T1["a.key_set()<br/>{CPU, Dense,<br/>AutogradCPU}"]
+        T2["b.key_set()<br/>{CPU, Dense,<br/>AutogradCPU}"]
+    end
+    
+    subgraph "提取阶段"
+        E1["合并<br/>{CPU, Dense,<br/>AutogradCPU}"]
+        E2["加入TLS<br/>include/exclude"]
+        E3["最终KeySet<br/>{AutogradCPU,<br/>CPU, Dense}"]
+    end
+    
+    subgraph "第一次Dispatch"
+        D1["highest=AutogradCPU<br/>→ VariableType"]
+    end
+    
+    subgraph "Autograd处理后"
+        A1["排除Autograd<br/>{CPU, Dense}"]
+    end
+    
+    subgraph "第二次Dispatch"
+        D2["highest=CPU<br/>→ CPU kernel"]
+    end
+    
+    T1 --> E1
+    T2 --> E1
+    E1 --> E2 --> E3
+    E3 --> D1
+    D1 --> A1
+    A1 --> D2
+    
+    style E3 fill:#ffe1f5
+    style D1 fill:#fff4e1
+    style D2 fill:#e1ffe1
+```
+
+---
+
+## 10. 总结
+
+### 关键数据结构关系
+
+```mermaid
+graph TB
+    Tensor[Tensor] -->|持有| KeySet[DispatchKeySet]
+    KeySet -->|提取| Dispatcher[Dispatcher::singleton]
+    Dispatcher -->|查找| OpEntry[OperatorEntry]
+    OpEntry -->|包含| Schema[FunctionSchema]
+    OpEntry -->|包含| Table[Dispatch Table]
+    Table -->|映射| Kernel[KernelFunction]
+    Kernel -->|调用| Impl[实际实现]
+    
+    style Dispatcher fill:#ffe1f5
+    style Table fill:#e1ffe1
+    style Kernel fill:#fff4e1
+```
+
+
+## LLDB 调试记录
+
 ```lldb
 (lldb) run
 There is a running process, kill it and restart?: [Y/n] y
