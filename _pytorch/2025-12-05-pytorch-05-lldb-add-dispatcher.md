@@ -3,7 +3,7 @@ title: "PyTorch源码解析系列 - 第05章：通过lldb调试，重点解析 D
 collection: pytorch
 permalink: /pytorch/2025-12-06-pytorch-05-lldb-add-dispatcher
 excerpt: "结合lldb调试记录，深入解析PyTorch Dispatcher分发机制的实现细节"
-date: 2025-12-06
+date: 2025-12-05
 ---
 
 本文档结合 PyTorch 2.8 源码与 LLDB 调试记录，详细解析 PyTorch 的 Dispatcher 分发机制。将从算子调用入口开始，一步步追踪到最终的 Kernel 执行，并深入探讨算子注册、DispatchKeySet 计算以及 Structured Kernel 的实现细节。
